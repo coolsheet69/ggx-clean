@@ -1138,29 +1138,43 @@ export default function Dashboard() {
   }, [prices.ggxPrice, prices.ethPriceUsd, ggxBackingValueUsd])
   
   // Track ratio history for the chart - with localStorage persistence
+  // Use interval to ensure regular data collection
   useEffect(() => {
-    // Don't track until history is loaded from localStorage
-    if (!historyLoaded) return
+    if (!historyLoaded || priceEfficiencyRatio === null || priceEfficiencyRatio <= 0) return
     
-    const now = Date.now()
+    const saveToStorage = (data: { time: number; ratio: number }[]) => {
+      try {
+        localStorage.setItem('ggx-priceEfficiencyHistory', JSON.stringify(data))
+      } catch {}
+    }
     
-    // Track price efficiency: Uniswap price / backing value
-    if (priceEfficiencyRatio !== null && priceEfficiencyRatio > 0) {
-      setPriceEfficiencyHistory(prev => {
-        // Only add if 15 seconds have passed since last entry (prevent duplicates)
-        const lastEntry = prev[prev.length - 1]
-        if (lastEntry && (now - lastEntry.time) < 15000) {
-          return prev
-        }
+    // Add initial point immediately if we don't have recent data
+    setPriceEfficiencyHistory(prev => {
+      const now = Date.now()
+      const lastEntry = prev[prev.length - 1]
+      
+      // Add if no data or if more than 10 seconds since last entry
+      if (!lastEntry || (now - lastEntry.time) >= 10000) {
         const newHistory = [...prev, { time: now, ratio: priceEfficiencyRatio }]
         const trimmed = newHistory.slice(-200)
-        // Save to localStorage
-        try {
-          localStorage.setItem('ggx-priceEfficiencyHistory', JSON.stringify(trimmed))
-        } catch {}
+        saveToStorage(trimmed)
+        return trimmed
+      }
+      return prev
+    })
+    
+    // Set up interval for regular updates
+    const interval = setInterval(() => {
+      setPriceEfficiencyHistory(prev => {
+        const now = Date.now()
+        const newHistory = [...prev, { time: now, ratio: priceEfficiencyRatio! }]
+        const trimmed = newHistory.slice(-200)
+        saveToStorage(trimmed)
         return trimmed
       })
-    }
+    }, 15000) // Every 15 seconds
+    
+    return () => clearInterval(interval)
   }, [priceEfficiencyRatio, historyLoaded])
   
   // Estimated GGX output for ETH zap
@@ -1420,8 +1434,24 @@ export default function Dashboard() {
                         {isPaused && <span className="text-[9px] text-[#EF4444] font-semibold">PAUSED</span>}
                       </div>
                       <p className="text-2xl font-bold font-mono">{formatNum(ggxSupply)}</p>
+                      {ggxBackingValueUsd > 0 && (
+                        <div className="mt-1 pt-1 border-t border-white/10">
+                          <p className="text-[10px] text-gray-400">Backing Price</p>
+                          <p className="text-base font-semibold text-[#FFD700]">${formatPrice(ggxBackingValueUsd)}/GGX</p>
+                        </div>
+                      )}
                       <div className="mt-1 pt-1 border-t border-white/10">
-                        <p className="text-[10px] text-gray-400">GGX Price</p>
+                        <div className="flex justify-between items-center">
+                          <p className="text-[10px] text-gray-400">GGX Price</p>
+                          <a 
+                            href={`https://app.uniswap.org/swap?inputCurrency=ETH&outputCurrency=${CONTRACTS.GGX}&chain=base`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[10px] text-[#10B981] hover:text-[#34D399] flex items-center gap-0.5 transition-colors"
+                          >
+                            Swap <ArrowUpRight size={10} />
+                          </a>
+                        </div>
                         <p className="text-base font-semibold text-[#10B981]">
                           {prices.ggxPrice > 0 
                             ? `$${formatPrice(prices.ggxPrice * prices.ethPriceUsd)}` 
@@ -1435,22 +1465,6 @@ export default function Dashboard() {
                           </p>
                         )}
                       </div>
-                      {ggxBackingValueUsd > 0 && (
-                        <div className="mt-1 pt-1 border-t border-white/10">
-                          <p className="text-[10px] text-gray-400">Backing Price</p>
-                          <p className="text-sm font-semibold text-[#FFD700]">${formatPrice(ggxBackingValueUsd)}/GGX</p>
-                        </div>
-                      )}
-                      <a 
-                        href={`https://app.uniswap.org/swap?inputCurrency=ETH&outputCurrency=${CONTRACTS.GGX}&chain=base`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="mt-1 pt-1 border-t border-white/10 flex items-center justify-between text-[10px] transition-colors"
-                      >
-                        <span className="text-[#FFD700] hover:text-[#FFA500] flex items-center gap-0.5">
-                          Swap <ArrowUpRight size={10} />
-                        </span>
-                      </a>
                     </div>
                     
                     {/* Combined ESHARE & RAGE Backing */}
@@ -1932,6 +1946,51 @@ export default function Dashboard() {
                             </div>
                           </div>
                           <p className="text-[9px] text-gray-500">Burn taxes are hardcoded at 1% each</p>
+                        </div>
+                        
+                        <div className="col-span-2 lg:col-span-4 bg-white/5 rounded-lg p-2 space-y-1">
+                          <p className="text-[10px] text-gray-400 uppercase">TVL Breakdown</p>
+                          <div className="grid grid-cols-3 gap-2 text-[9px]">
+                            <div className="bg-[#8B5CF6]/10 rounded p-1.5">
+                              <p className="text-[#8B5CF6] font-semibold">ESHARE Backing</p>
+                              <p className="text-white">{backingBalances ? formatNum(backingBalances[0]) : '—'} ES</p>
+                              <p className="text-gray-400">
+                                {backingBalances && prices.esharePrice > 0 
+                                  ? `$${formatPrice(parseFloat(formatUnits(backingBalances[0], 18)) * prices.esharePrice * prices.ethPriceUsd)}`
+                                  : '—'}
+                              </p>
+                            </div>
+                            <div className="bg-[#EF4444]/10 rounded p-1.5">
+                              <p className="text-[#EF4444] font-semibold">RAGE Backing</p>
+                              <p className="text-white">{backingBalances ? formatNum(backingBalances[1]) : '—'} RA</p>
+                              <p className="text-gray-400">
+                                {backingBalances && prices.ragePrice > 0 
+                                  ? `$${formatPrice(parseFloat(formatUnits(backingBalances[1], 18)) * prices.ragePrice)}`
+                                  : '—'}
+                              </p>
+                            </div>
+                            <div className="bg-[#3B82F6]/10 rounded p-1.5">
+                              <p className="text-[#3B82F6] font-semibold">ETH in LP</p>
+                              <p className="text-white">{ggxPoolWethBal ? formatNum(ggxPoolWethBal, 18) : '—'} ETH</p>
+                              <p className="text-gray-400">
+                                {ggxPoolWethBal && prices.ethPriceUsd > 0 
+                                  ? `$${formatPrice(parseFloat(formatUnits(ggxPoolWethBal, 18)) * prices.ethPriceUsd)}`
+                                  : '—'}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="mt-1 pt-1 border-t border-white/10 flex justify-between items-center">
+                            <span className="text-[10px] text-gray-400">Total TVL:</span>
+                            <span className="text-sm font-bold text-[#FFD700]">
+                              ${backingBalances && prices.ethPriceUsd > 0 
+                                ? formatPrice((
+                                    parseFloat(formatUnits(backingBalances[0], 18)) * prices.esharePrice * prices.ethPriceUsd +
+                                    parseFloat(formatUnits(backingBalances[1], 18)) * prices.ragePrice +
+                                    (ggxPoolWethBal ? parseFloat(formatUnits(ggxPoolWethBal, 18)) : 0) * prices.ethPriceUsd
+                                  ))
+                                : '—'}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     )}
