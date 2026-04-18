@@ -636,10 +636,25 @@ export default function Dashboard() {
   const [rescueToken, setRescueToken] = useState('')
   const [rescueAmount, setRescueAmount] = useState('')
   
-  // Ratio history
+  // Ratio history - persisted to localStorage
   const [ratioHistory, setRatioHistory] = useState<{ time: number; ratio: number }[]>([])
   const [priceEfficiencyHistory, setPriceEfficiencyHistory] = useState<{ time: number; ratio: number }[]>([])
+  const [historyLoaded, setHistoryLoaded] = useState(false)
   const [timeRange, setTimeRange] = useState<TimeRange>('4h')
+  
+  // Load history from localStorage on mount
+  useEffect(() => {
+    try {
+      const savedPrice = localStorage.getItem('ggx-priceEfficiencyHistory')
+      if (savedPrice) {
+        const parsed = JSON.parse(savedPrice)
+        const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
+        const filtered = parsed.filter((h: { time: number; ratio: number }) => h.time > weekAgo)
+        setPriceEfficiencyHistory(filtered)
+      }
+    } catch {}
+    setHistoryLoaded(true)
+  }, [])
   
   // Burnt amounts from events (indexer) - using mathematical calculation from backing added
   // Since burn tax (1%) = backing tax (2%) / 2, we can derive burns from totalBackingAdded
@@ -1122,27 +1137,31 @@ export default function Dashboard() {
     return ggxPriceUsd / ggxBackingValueUsd
   }, [prices.ggxPrice, prices.ethPriceUsd, ggxBackingValueUsd])
   
-  // Track ratio history for the chart
+  // Track ratio history for the chart - with localStorage persistence
   useEffect(() => {
-    // Track backing ratio (floor value)
-    const ratioToTrack = actualBackingRatio?.total || currentRatio
-    const now = Date.now()
+    // Don't track until history is loaded from localStorage
+    if (!historyLoaded) return
     
-    if (ratioToTrack > 0) {
-      setRatioHistory(prev => {
-        const newHistory = [...prev, { time: now, ratio: ratioToTrack }]
-        return newHistory.slice(-200) // Keep more data for week view
-      })
-    }
+    const now = Date.now()
     
     // Track price efficiency: Uniswap price / backing value
     if (priceEfficiencyRatio !== null && priceEfficiencyRatio > 0) {
       setPriceEfficiencyHistory(prev => {
+        // Only add if 15 seconds have passed since last entry (prevent duplicates)
+        const lastEntry = prev[prev.length - 1]
+        if (lastEntry && (now - lastEntry.time) < 15000) {
+          return prev
+        }
         const newHistory = [...prev, { time: now, ratio: priceEfficiencyRatio }]
-        return newHistory.slice(-200)
+        const trimmed = newHistory.slice(-200)
+        // Save to localStorage
+        try {
+          localStorage.setItem('ggx-priceEfficiencyHistory', JSON.stringify(trimmed))
+        } catch {}
+        return trimmed
       })
     }
-  }, [actualBackingRatio, currentRatio, priceEfficiencyRatio])
+  }, [priceEfficiencyRatio, historyLoaded])
   
   // Estimated GGX output for ETH zap
   // Based on actual Uniswap price adjusted for zap efficiency
@@ -1376,9 +1395,6 @@ export default function Dashboard() {
                       <p className="text-[10px] text-[#10B981] flex items-center gap-1">
                         <TrendingUp size={10} /> {formatRatio(backingRatio?.[0])} ES + {formatRatio(backingRatio?.[1])} RA
                       </p>
-                      {ggxBackingValueUsd > 0 && (
-                        <p className="text-[10px] text-gray-400">≈ ${formatPrice(ggxBackingValueUsd)}/GGX</p>
-                      )}
                       {/* Protocol TVL */}
                       {backingBalances && prices.ethPriceUsd > 0 && (
                         <div className="mt-1 pt-1 border-t border-white/10">
@@ -1419,6 +1435,12 @@ export default function Dashboard() {
                           </p>
                         )}
                       </div>
+                      {ggxBackingValueUsd > 0 && (
+                        <div className="mt-1 pt-1 border-t border-white/10">
+                          <p className="text-[10px] text-gray-400">Backing Price</p>
+                          <p className="text-sm font-semibold text-[#FFD700]">${formatPrice(ggxBackingValueUsd)}/GGX</p>
+                        </div>
+                      )}
                       <a 
                         href={`https://app.uniswap.org/swap?inputCurrency=ETH&outputCurrency=${CONTRACTS.GGX}&chain=base`}
                         target="_blank"
